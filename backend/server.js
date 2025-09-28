@@ -7,7 +7,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "http://localhost:3000", // Your Next.js frontend
+    origin: "http://localhost:3000",
     methods: ["GET", "POST"]
   }
 });
@@ -24,27 +24,113 @@ let currentGestureState = {
   transformMode: 'translate'
 };
 
+// Store previous frame data for movement calculation
+const previousFrameData = new Map();
+
 // Gesture classification thresholds
 const GESTURE_THRESHOLDS = {
-  FINGER_CLOSED: 0.7,    // Above this = finger is bent/closed
-  FINGER_OPEN: 0.3,      // Below this = finger is extended/open
-  PINCH_THRESHOLD: 0.6,  // Thumb + index proximity for pinch
-  FIST_THRESHOLD: 0.7,   // All fingers bent for fist
-  PALM_PRESSURE: 0.5     // Palm pressure for grip detection
+  FINGER_CLOSED: 0.7,
+  FINGER_OPEN: 0.3,
+  PINCH_THRESHOLD: 0.6,
+  FIST_THRESHOLD: 0.7,
+  PALM_PRESSURE: 0.5
 };
 
 /**
+ * Calculate movement data between frames
+ */
+function calculateMovementData(currentData, previousData) {
+  if (!previousData) {
+    return {
+      orientationDelta: [0, 0, 0],
+      positionDelta: { x: 0, y: 0, z: 0 },
+      velocity: { x: 0, y: 0, z: 0 },
+      scaleFactor: 1.0,
+      orientation: currentData.imu.orientation,
+      position: currentData.position || { x: 0, y: 0, z: 0 },
+      movementMagnitude: 0,
+      positionMagnitude: 0,
+      deltaTime: 0,
+      timestamp: currentData.timestamp
+    };
+  }
+
+  const deltaTime = (currentData.timestamp - previousData.timestamp) / 1000; // Convert to seconds
+  const currentPos = currentData.position || { x: 0, y: 0, z: 0 };
+  const prevPos = previousData.position || { x: 0, y: 0, z: 0 };
+
+  // Calculate position deltas
+  const positionDelta = {
+    x: currentPos.x - prevPos.x,
+    y: currentPos.y - prevPos.y,
+    z: currentPos.z - prevPos.z
+  };
+
+  // Calculate velocity
+  const velocity = deltaTime > 0 ? {
+    x: positionDelta.x / deltaTime,
+    y: positionDelta.y / deltaTime,
+    z: positionDelta.z / deltaTime
+  } : { x: 0, y: 0, z: 0 };
+
+  // Calculate orientation deltas
+  const orientationDelta = [
+    currentData.imu.orientation[0] - previousData.imu.orientation[0],
+    currentData.imu.orientation[1] - previousData.imu.orientation[1],
+    currentData.imu.orientation[2] - previousData.imu.orientation[2]
+  ];
+
+  // Calculate movement magnitudes
+  const positionMagnitude = Math.sqrt(
+    positionDelta.x * positionDelta.x + 
+    positionDelta.y * positionDelta.y + 
+    positionDelta.z * positionDelta.z
+  );
+
+  const orientationMagnitude = Math.sqrt(
+    orientationDelta[0] * orientationDelta[0] +
+    orientationDelta[1] * orientationDelta[1] +
+    orientationDelta[2] * orientationDelta[2]
+  );
+
+  const movementMagnitude = Math.max(positionMagnitude, orientationMagnitude);
+
+  // Calculate scale factor for pinch gestures
+  let scaleFactor = 1.0;
+  if (currentData.fingers && previousData.fingers) {
+    const currentPinchDistance = Math.abs(currentData.fingers.index - (currentData.thumb?.bend || 0.5));
+    const prevPinchDistance = Math.abs(previousData.fingers.index - (previousData.thumb?.bend || 0.5));
+    
+    if (prevPinchDistance > 0) {
+      scaleFactor = currentPinchDistance / prevPinchDistance;
+      // Clamp scale factor to reasonable range
+      scaleFactor = Math.max(0.5, Math.min(2.0, scaleFactor));
+    }
+  }
+
+  return {
+    orientationDelta,
+    positionDelta,
+    velocity,
+    scaleFactor,
+    orientation: currentData.imu.orientation,
+    position: currentPos,
+    movementMagnitude,
+    positionMagnitude,
+    deltaTime,
+    timestamp: currentData.timestamp
+  };
+}
+
+/**
  * Gesture Classification Logic
- * Maps raw sensor data to meaningful gestures
  */
 function classifyGesture(sensorData) {
   const { fingers, thumb, palm } = sensorData;
   
-  // Count closed fingers
   const closedFingers = Object.values(fingers).filter(bend => bend > GESTURE_THRESHOLDS.FINGER_CLOSED).length;
   const openFingers = Object.values(fingers).filter(bend => bend < GESTURE_THRESHOLDS.FINGER_OPEN).length;
   
-  // Detect specific gestures
   const isPinch = (
     fingers.index < GESTURE_THRESHOLDS.PINCH_THRESHOLD && 
     thumb.bend < GESTURE_THRESHOLDS.PINCH_THRESHOLD &&
@@ -59,7 +145,6 @@ function classifyGesture(sensorData) {
     fingers.ring > GESTURE_THRESHOLDS.FINGER_CLOSED
   );
   
-  // Classify primary gesture
   let gesture = 'neutral';
   if (isPinch) gesture = 'pinch';
   else if (isFist) gesture = 'fist';
@@ -69,22 +154,11 @@ function classifyGesture(sensorData) {
   return {
     gesture,
     confidence: calculateConfidence(gesture, { fingers, thumb, palm }),
-    details: {
-      isPinch,
-      isFist,
-      isOpenPalm,
-      isPointing,
-      closedFingers,
-      openFingers
-    }
+    details: { isPinch, isFist, isOpenPalm, isPointing, closedFingers, openFingers }
   };
 }
 
-/**
- * Calculate gesture confidence based on sensor clarity
- */
 function calculateConfidence(gesture, sensors) {
-  // Simple confidence calculation - could be enhanced with ML
   let confidence = 0.5;
   
   switch(gesture) {
@@ -99,34 +173,29 @@ function calculateConfidence(gesture, sensors) {
       const avgOpen = 1 - (Object.values(sensors.fingers).reduce((a, b) => a + b, 0) / 5);
       confidence = Math.min(1, avgOpen);
       break;
+    case 'pointing':
+      confidence = 1 - sensors.fingers.index + sensors.fingers.middle * 0.5;
+      break;
   }
   
   return Math.max(0.1, Math.min(1, confidence));
 }
 
-/**
- * Map gesture to transform mode
- */
 function gestureToTransformMode(gesture) {
   const mapping = {
-    'open_palm': 'translate',  // Move mode
-    'fist': 'rotate',          // Rotate mode  
-    'pinch': 'scale',          // Scale mode
-    'pointing': 'cursor'       // Cursor/selection mode
+    'open_palm': 'translate',
+    'fist': 'rotate',
+    'pinch': 'scale',
+    'pointing': 'cursor'
   };
   
   return mapping[gesture] || 'translate';
 }
 
-/**
- * Normalize IMU orientation to cursor direction
- */
 function normalizeCursorOrientation(imuData) {
   const { orientation } = imuData;
   const [roll, pitch, yaw] = orientation;
   
-  // Convert IMU Euler angles to normalized direction vector
-  // This creates a ray direction from the hand orientation
   const x = Math.sin(yaw) * Math.cos(pitch);
   const y = Math.sin(pitch);
   const z = Math.cos(yaw) * Math.cos(pitch);
@@ -140,16 +209,22 @@ function normalizeCursorOrientation(imuData) {
 function processSensorData(rawData) {
   const { deviceId, imu, fingers, thumb, palm, switches } = rawData;
   
-  // Classify the current gesture
+  // Get previous frame data for movement calculation
+  const previousData = previousFrameData.get(deviceId);
+  
+  // Calculate movement data
+  const movementData = calculateMovementData(rawData, previousData);
+  
+  // Store current data for next frame
+  previousFrameData.set(deviceId, {
+    ...rawData,
+    timestamp: rawData.timestamp
+  });
+  
   const gestureResult = classifyGesture({ fingers, thumb, palm });
-  
-  // Get cursor orientation from IMU
   const cursorOrientation = normalizeCursorOrientation(imu);
-  
-  // Determine transform mode from gesture
   const transformMode = gestureToTransformMode(gestureResult.gesture);
   
-  // Process switch states for discrete actions
   const actions = {
     selectAction: switches.selectButton || false,
     modeSwitch: switches.modeButton || false,
@@ -164,8 +239,10 @@ function processSensorData(rawData) {
     gestureConfidence: gestureResult.confidence,
     transformMode,
     actions,
+    movementData, // Now includes calculated movement data
     rawSensorData: {
       imu: imu.orientation,
+      position: rawData.position,
       fingerBends: fingers,
       thumbBend: thumb.bend,
       palmPressure: palm.pressure || 0
@@ -174,16 +251,10 @@ function processSensorData(rawData) {
 }
 
 // API Endpoints
-
-/**
- * POST /sensor-data
- * Receives raw sensor data from the glove hardware
- */
 app.post('/sensor-data', (req, res) => {
   try {
     const rawSensorData = req.body;
     
-    // Validate required fields
     if (!rawSensorData.deviceId || !rawSensorData.imu || !rawSensorData.fingers) {
       return res.status(400).json({ 
         error: 'Missing required sensor data fields',
@@ -191,7 +262,6 @@ app.post('/sensor-data', (req, res) => {
       });
     }
     
-    // Process the raw data into actionable commands
     const processedData = processSensorData(rawSensorData);
     
     // Update current state
@@ -204,15 +274,16 @@ app.post('/sensor-data', (req, res) => {
     // Broadcast to all connected frontend clients
     io.emit('gesture-update', processedData);
     
-    // Log for debugging
-    console.log(`[${processedData.deviceId}] Gesture: ${processedData.gesture} (${(processedData.gestureConfidence * 100).toFixed(0)}%) - Mode: ${processedData.transformMode}`);
+    // Enhanced logging
+    console.log(`[${processedData.deviceId}] ${processedData.gesture} (${(processedData.gestureConfidence * 100).toFixed(0)}%) | Movement: ${processedData.movementData.movementMagnitude.toFixed(3)}`);
     
     res.json({ 
       status: 'success', 
       processedData: {
         gesture: processedData.gesture,
         transformMode: processedData.transformMode,
-        confidence: processedData.gestureConfidence
+        confidence: processedData.gestureConfidence,
+        movementMagnitude: processedData.movementData.movementMagnitude
       }
     });
     
@@ -222,10 +293,6 @@ app.post('/sensor-data', (req, res) => {
   }
 });
 
-/**
- * GET /current-state
- * Returns the current gesture state for debugging
- */
 app.get('/current-state', (req, res) => {
   res.json({
     currentState: currentGestureState,
@@ -234,17 +301,10 @@ app.get('/current-state', (req, res) => {
   });
 });
 
-/**
- * POST /calibrate
- * Endpoint for sensor calibration
- */
 app.post('/calibrate', (req, res) => {
   const { deviceId, calibrationData } = req.body;
   
-  // Store calibration data (in production, save to database)
   console.log(`Calibration received for ${deviceId}:`, calibrationData);
-  
-  // Broadcast calibration complete
   io.emit('calibration-complete', { deviceId });
   
   res.json({ status: 'calibration-saved', deviceId });
@@ -255,14 +315,11 @@ io.on('connection', (socket) => {
   console.log(`Frontend client connected: ${socket.id}`);
   connectedClients.add(socket.id);
   
-  // Send current state to newly connected client
   socket.emit('initial-state', currentGestureState);
   
-  // Handle frontend commands
   socket.on('select-object', (objectId) => {
     currentGestureState.selectedObject = objectId;
     console.log(`Object selected: ${objectId}`);
-    // Broadcast to other clients
     socket.broadcast.emit('object-selected', objectId);
   });
   
@@ -278,7 +335,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 

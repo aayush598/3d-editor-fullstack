@@ -1,42 +1,42 @@
 /**
- * Comprehensive Movement Test Script
+ * Enhanced Movement Test Script
  * Tests all gesture-based transformations with realistic movement patterns
  */
 
 const axios = require('axios');
 
 const BACKEND_URL = 'http://localhost:3001';
-const DEVICE_ID = 'testHand';
+const DEVICE_ID = 'testHand_right';
 
 class MovementTester {
   constructor() {
     this.testSequences = [
       {
         name: 'Object Selection Test',
-        description: 'Point at different locations to test cursor movement',
+        description: 'Point at different locations to test cursor movement and selection',
         gesture: 'pointing',
-        duration: 5000,
+        duration: 8000,
         movement: this.generateCursorMovement.bind(this)
       },
       {
         name: 'Object Translation Test', 
         description: 'Move object in 3D space with open palm',
         gesture: 'open_palm',
-        duration: 6000,
+        duration: 10000,
         movement: this.generateTranslationMovement.bind(this)
       },
       {
         name: 'Object Rotation Test',
         description: 'Rotate object with fist gesture',
         gesture: 'fist',
-        duration: 6000,
+        duration: 10000,
         movement: this.generateRotationMovement.bind(this)
       },
       {
         name: 'Object Scaling Test',
         description: 'Scale object with pinch gesture',
         gesture: 'pinch',
-        duration: 5000,
+        duration: 8000,
         movement: this.generateScalingMovement.bind(this)
       }
     ];
@@ -44,83 +44,114 @@ class MovementTester {
     this.currentTestIndex = 0;
     this.testStartTime = 0;
     this.isRunning = false;
+    this.previousPosition = { x: 0, y: 0, z: 0 };
+    this.previousOrientation = [0, 0, 0];
   }
 
   // Generate realistic cursor pointing movements
   generateCursorMovement(elapsedTime) {
     const t = elapsedTime / 1000;
+    const orientation = [
+      0.1 + Math.sin(t * 1.2) * 0.4,  // Roll: gentle sway
+      0.2 + Math.sin(t * 0.8) * 0.6,  // Pitch: up/down pointing
+      Math.sin(t * 0.5) * 1.2         // Yaw: left/right sweep
+    ];
+    
+    const position = { x: 0, y: 0, z: 0 }; // Stationary for pointing
+    
     return {
-      orientation: [
-        0.1 + Math.sin(t * 1.2) * 0.4,  // Roll: gentle sway
-        0.2 + Math.sin(t * 0.8) * 0.6,  // Pitch: up/down pointing
-        Math.sin(t * 0.5) * 1.2         // Yaw: left/right sweep
-      ],
-      position: { x: 0, y: 0, z: 0 },
-      description: `Pointing sweep: [${(Math.sin(t * 0.5) * 1.2).toFixed(2)} rad yaw]`
+      orientation,
+      position,
+      description: `Pointing sweep: [${orientation.map(o => o.toFixed(2)).join(', ')}] rad`
     };
   }
 
-  // Generate 3D translation movements
+  // Generate 3D translation movements with continuous motion
   generateTranslationMovement(elapsedTime) {
     const t = elapsedTime / 1000;
     const radius = 0.8;
     const height = 0.6;
+    const speed = 0.7; // Slower for smoother movement
+    
+    const position = {
+      x: Math.sin(t * speed) * radius,        // Circular X movement
+      y: Math.sin(t * speed * 1.3) * height,  // Oscillating Y movement  
+      z: Math.cos(t * speed) * radius         // Circular Z movement
+    };
     
     return {
       orientation: [0.05, 0.05, 0.05], // Stable orientation
-      position: {
-        x: Math.sin(t * 0.7) * radius,      // Circular X movement
-        y: Math.sin(t * 1.1) * height,      // Oscillating Y movement  
-        z: Math.cos(t * 0.7) * radius       // Circular Z movement
-      },
-      description: `Translation: [${(Math.sin(t * 0.7) * radius).toFixed(2)}, ${(Math.sin(t * 1.1) * height).toFixed(2)}, ${(Math.cos(t * 0.7) * radius).toFixed(2)}]`
+      position,
+      description: `Translation: [${Object.values(position).map(v => v.toFixed(3)).join(', ')}]`
     };
   }
 
-  // Generate rotation movements
+  // Generate rotation movements with continuous orientation changes
   generateRotationMovement(elapsedTime) {
     const t = elapsedTime / 1000;
-    const rotationSpeed = 0.8;
+    const rotationSpeed = 0.6; // Slower for smoother rotation
+    
+    const orientation = [
+      Math.sin(t * rotationSpeed) * 0.8,           // Roll rotation
+      Math.cos(t * rotationSpeed * 1.3) * 0.6,     // Pitch rotation
+      (t * rotationSpeed * 0.4) % (Math.PI * 2)    // Continuous yaw rotation
+    ];
     
     return {
-      orientation: [
-        Math.sin(t * rotationSpeed) * 0.8,     // Roll rotation
-        Math.cos(t * rotationSpeed * 1.3) * 0.6, // Pitch rotation
-        t * rotationSpeed * 0.4                 // Continuous yaw rotation
-      ],
+      orientation,
       position: { x: 0, y: 0, z: 0 }, // Stable position
-      description: `Rotation: [${(Math.sin(t * rotationSpeed) * 0.8).toFixed(2)}, ${(Math.cos(t * rotationSpeed * 1.3) * 0.6).toFixed(2)}, ${(t * rotationSpeed * 0.4).toFixed(2)}] rad`
+      description: `Rotation: [${orientation.map(o => o.toFixed(3)).join(', ')}] rad`
     };
   }
 
-  // Generate scaling movements (pinch distance changes)
+  // Generate scaling movements with pinch distance changes
   generateScalingMovement(elapsedTime) {
     const t = elapsedTime / 1000;
-    const scaleOscillation = Math.sin(t * 1.5);
-    const baseDistance = 0.3;
-    const scaleRange = 0.5;
+    const scaleOscillation = Math.sin(t * 1.0); // Slower oscillation
+    const baseDistance = 0.4;
+    const scaleRange = 0.6;
+    
+    // Simulate pinch distance by varying finger positions
+    const pinchDistance = baseDistance + Math.abs(scaleOscillation * scaleRange);
+    
+    const position = {
+      x: scaleOscillation * scaleRange * 0.5,  // Hands moving apart/together
+      y: 0.2,                                  // Slightly elevated
+      z: scaleOscillation * scaleRange * 0.2   // Some depth movement
+    };
     
     return {
       orientation: [0.02, 0.02, 0.02], // Very stable for precise scaling
-      position: {
-        x: scaleOscillation * scaleRange,  // Hands moving apart/together
-        y: 0.1,                           // Slightly elevated
-        z: scaleOscillation * scaleRange * 0.3  // Some depth movement
-      },
-      description: `Scaling: distance = ${(baseDistance + Math.abs(scaleOscillation * scaleRange)).toFixed(2)}m`
+      position,
+      pinchDistance, // Used for finger positioning
+      description: `Scaling: pinch distance = ${pinchDistance.toFixed(3)}m`
     };
   }
 
   // Generate gesture-specific finger positions
-  getGestureFingers(gesture) {
+  getGestureFingers(gesture, movementData = null) {
     const patterns = {
       pointing: { index: 0.1, middle: 0.9, ring: 0.9, little: 0.9 },
       open_palm: { index: 0.1, middle: 0.1, ring: 0.1, little: 0.1 },
       fist: { index: 0.9, middle: 0.9, ring: 0.9, little: 0.9 },
-      pinch: { index: 0.2, middle: 0.8, ring: 0.8, little: 0.8 }
+      pinch: { index: 0.3, middle: 0.8, ring: 0.8, little: 0.8 }
     };
     
-    return patterns[gesture] || patterns.open_palm;
+    let fingers = { ...patterns[gesture] } || { ...patterns.open_palm };
+    
+    // For pinch gesture, vary finger positions based on pinch distance
+    if (gesture === 'pinch' && movementData && movementData.pinchDistance) {
+      const pinchFactor = Math.max(0.1, Math.min(0.8, movementData.pinchDistance));
+      fingers.index = pinchFactor;
+    }
+    
+    // Add realistic noise
+    Object.keys(fingers).forEach(finger => {
+      fingers[finger] += (Math.random() - 0.5) * 0.05; // Reduced noise
+      fingers[finger] = Math.max(0, Math.min(1, fingers[finger]));
+    });
+
+    return fingers;
   }
 
   // Generate complete sensor data for current test
@@ -129,13 +160,17 @@ class MovementTester {
     const elapsedTime = Date.now() - this.testStartTime;
     const movement = currentTest.movement(elapsedTime);
     
-    const fingers = this.getGestureFingers(currentTest.gesture);
+    const fingers = this.getGestureFingers(currentTest.gesture, movement);
     
-    // Add realistic noise
-    Object.keys(fingers).forEach(finger => {
-      fingers[finger] += (Math.random() - 0.5) * 0.1;
-      fingers[finger] = Math.max(0, Math.min(1, fingers[finger]));
+    // Add small random variations to make movement more realistic
+    const noiseLevel = 0.001;
+    Object.keys(movement.position).forEach(axis => {
+      movement.position[axis] += (Math.random() - 0.5) * noiseLevel;
     });
+    
+    movement.orientation = movement.orientation.map(angle => 
+      angle + (Math.random() - 0.5) * noiseLevel
+    );
 
     return {
       deviceId: DEVICE_ID,
@@ -143,35 +178,43 @@ class MovementTester {
       imu: {
         orientation: movement.orientation,
         acceleration: [
-          (Math.random() - 0.5) * 0.5,
-          9.8 + (Math.random() - 0.5) * 0.3,
-          (Math.random() - 0.5) * 0.5
+          (Math.random() - 0.5) * 0.3,
+          9.8 + (Math.random() - 0.5) * 0.2,
+          (Math.random() - 0.5) * 0.3
         ],
-        gyroscope: movement.orientation.map(o => o * 0.3 + (Math.random() - 0.5) * 0.1)
+        gyroscope: movement.orientation.map(o => o * 0.3 + (Math.random() - 0.5) * 0.05)
       },
       position: movement.position,
       fingers,
-      thumb: { bend: currentTest.gesture === 'pinch' ? 0.2 : 0.5 },
-      palm: { pressure: currentTest.gesture === 'fist' ? 0.8 : 0.3 },
+      thumb: { 
+        bend: currentTest.gesture === 'pinch' ? 
+          (movement.pinchDistance ? Math.max(0.1, movement.pinchDistance) : 0.3) : 
+          (currentTest.gesture === 'fist' ? 0.9 : 0.4)
+      },
+      palm: { 
+        pressure: currentTest.gesture === 'fist' ? 0.8 : 
+                 currentTest.gesture === 'pinch' ? 0.6 : 0.3 
+      },
       switches: {
-        selectButton: currentTest.gesture === 'pinch',
+        selectButton: currentTest.gesture === 'pinch' && elapsedTime > 1000,
         modeButton: false,
         confirmButton: false
       },
       gestureMetadata: {
         testName: currentTest.name,
         elapsedTime,
-        description: movement.description
+        description: movement.description,
+        expectedGesture: currentTest.gesture
       }
     };
   }
 
-  // Send test data to backend
+  // Send test data to backend with enhanced error handling
   async sendTestData() {
     try {
       const testData = this.generateTestData();
       const response = await axios.post(`${BACKEND_URL}/sensor-data`, testData, {
-        timeout: 5000,
+        timeout: 3000,
         headers: { 'Content-Type': 'application/json' }
       });
 
@@ -180,17 +223,35 @@ class MovementTester {
         const currentTest = this.testSequences[this.currentTestIndex];
         const progress = ((Date.now() - this.testStartTime) / currentTest.duration * 100).toFixed(0);
         
-        console.log(`🧪 ${currentTest.name} [${progress}%]: ${processed.gesture} (${(processed.confidence * 100).toFixed(0)}%) | ${testData.gestureMetadata.description}`);
+        // Enhanced logging with movement magnitude
+        const movementInfo = processed.movementMagnitude ? 
+          ` | Movement: ${processed.movementMagnitude.toFixed(4)}` : '';
+        
+        console.log(`🧪 ${currentTest.name} [${progress}%]: ${processed.gesture} (${(processed.confidence * 100).toFixed(0)}%)${movementInfo} | ${testData.gestureMetadata.description}`);
+        
+        // Warn if gesture doesn't match expected
+        if (processed.gesture !== currentTest.gesture) {
+          console.log(`⚠️  Expected: ${currentTest.gesture}, Detected: ${processed.gesture}`);
+        }
       }
     } catch (error) {
-      console.error(`❌ Test error: ${error.message}`);
+      if (error.code === 'ECONNREFUSED') {
+        console.error(`❌ Backend not responding. Is it running on ${BACKEND_URL}?`);
+      } else if (error.code === 'ETIMEDOUT') {
+        console.error(`⏱️  Request timeout. Backend may be overloaded.`);
+      } else {
+        console.error(`❌ Test error: ${error.message}`);
+      }
     }
   }
 
   // Run the comprehensive test suite
   async runTests() {
-    console.log('🧪 Starting Comprehensive Movement Test Suite');
-    console.log('='.repeat(60));
+    console.log('🧪 Starting Enhanced Movement Test Suite');
+    console.log('=' .repeat(60));
+    console.log('📋 This test will simulate realistic hand movements for gesture control');
+    console.log('🎯 Add objects to your scene and toggle gesture mode (G) in the frontend');
+    console.log('');
     
     for (let i = 0; i < this.testSequences.length; i++) {
       this.currentTestIndex = i;
@@ -198,16 +259,16 @@ class MovementTester {
       
       console.log(`\n🎯 Test ${i + 1}/${this.testSequences.length}: ${currentTest.name}`);
       console.log(`📝 ${currentTest.description}`);
-      console.log(`⏱️  Duration: ${currentTest.duration / 1000}s`);
-      console.log('-'.repeat(40));
+      console.log(`⏱️  Duration: ${currentTest.duration / 1000}s | Update Rate: 50Hz`);
+      console.log('-' .repeat(50));
       
       this.testStartTime = Date.now();
       this.isRunning = true;
       
-      // Run test for specified duration
+      // Higher frequency for smoother movement data
       const testInterval = setInterval(() => {
         this.sendTestData();
-      }, 100); // 10Hz update rate
+      }, 20); // 50Hz update rate for smoother movement
       
       // Wait for test completion
       await new Promise(resolve => {
@@ -221,8 +282,8 @@ class MovementTester {
       
       // Brief pause between tests
       if (i < this.testSequences.length - 1) {
-        console.log('⏸️  Pausing 2 seconds before next test...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log('⏸️  Pausing 3 seconds before next test...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
     
@@ -232,19 +293,25 @@ class MovementTester {
     this.testSequences.forEach((test, i) => {
       console.log(`   ${i + 1}. ${test.name} - ${test.duration / 1000}s`);
     });
+    console.log('\n💡 Tips for best results:');
+    console.log('   • Make sure gesture mode is enabled (G key)');
+    console.log('   • Add objects to the scene before running tests');
+    console.log('   • Objects should be selected automatically during pointing test');
+    console.log('   • Watch the movement data in the UI for real-time feedback');
   }
 
-  // Run a single test by name
+  // Run a single test by name with enhanced matching
   async runSingleTest(testName) {
     const testIndex = this.testSequences.findIndex(t => 
-      t.name.toLowerCase().includes(testName.toLowerCase())
+      t.name.toLowerCase().includes(testName.toLowerCase()) ||
+      t.gesture.toLowerCase().includes(testName.toLowerCase())
     );
     
     if (testIndex === -1) {
       console.log(`❌ Test "${testName}" not found`);
-      console.log('Available tests:');
+      console.log('📋 Available tests:');
       this.testSequences.forEach((test, i) => {
-        console.log(`   ${i + 1}. ${test.name}`);
+        console.log(`   ${i + 1}. ${test.name} (${test.gesture})`);
       });
       return;
     }
@@ -254,13 +321,16 @@ class MovementTester {
     
     console.log(`🧪 Running single test: ${test.name}`);
     console.log(`📝 ${test.description}`);
+    console.log(`🎯 Expected gesture: ${test.gesture}`);
+    console.log(`⏱️  Duration: ${test.duration / 1000}s`);
+    console.log('-'.repeat(40));
     
     this.testStartTime = Date.now();
     this.isRunning = true;
     
     const testInterval = setInterval(() => {
       this.sendTestData();
-    }, 100);
+    }, 20); // 50Hz
     
     setTimeout(() => {
       clearInterval(testInterval);
@@ -268,33 +338,63 @@ class MovementTester {
       console.log(`✅ Test "${test.name}" completed`);
     }, test.duration);
   }
+
+  // Test backend connectivity and show system status
+  async checkSystem() {
+    try {
+      console.log('🔍 Checking system status...');
+      
+      const healthResponse = await axios.get(`${BACKEND_URL}/health`, { timeout: 2000 });
+      console.log('✅ Backend health:', healthResponse.data);
+      
+      const stateResponse = await axios.get(`${BACKEND_URL}/current-state`, { timeout: 2000 });
+      console.log('📊 Current gesture state:', stateResponse.data.currentState);
+      console.log(`👥 Connected clients: ${stateResponse.data.connectedClients}`);
+      
+      return true;
+    } catch (error) {
+      console.error('❌ System check failed:', error.message);
+      return false;
+    }
+  }
 }
 
-// Command line interface
+// Enhanced command line interface
 async function main() {
   const args = process.argv.slice(2);
   const tester = new MovementTester();
   
   if (args.length === 0) {
-    console.log('🎮 Movement Test Options:');
-    console.log('  node movement-test.js all          - Run all tests');
-    console.log('  node movement-test.js cursor       - Test cursor movement');
-    console.log('  node movement-test.js translate    - Test translation');
-    console.log('  node movement-test.js rotate       - Test rotation');
-    console.log('  node movement-test.js scale        - Test scaling');
+    console.log('🎮 Enhanced Movement Test Options:');
+    console.log('  node movement-test.js all          - Run all tests sequentially');
+    console.log('  node movement-test.js cursor       - Test cursor movement & selection');
+    console.log('  node movement-test.js translate    - Test object translation');
+    console.log('  node movement-test.js rotate       - Test object rotation');
+    console.log('  node movement-test.js scale        - Test object scaling');
+    console.log('  node movement-test.js check        - Check system status');
+    console.log('');
+    console.log('💡 Make sure to:');
+    console.log('  1. Start the backend server (node server.js)');
+    console.log('  2. Open the frontend and add some objects');
+    console.log('  3. Enable gesture mode with "G" key');
+    console.log('  4. Run the desired test');
     console.log('');
     return;
   }
   
   const command = args[0].toLowerCase();
   
-  // Check backend connectivity first
-  try {
-    await axios.get(`${BACKEND_URL}/health`, { timeout: 2000 });
-    console.log('✅ Backend connection verified');
-  } catch (error) {
-    console.error('❌ Backend not responding. Start backend server first.');
-    return;
+  // Check system first for all commands except help
+  if (command !== 'help') {
+    const systemOk = await tester.checkSystem();
+    if (!systemOk) {
+      console.log('');
+      console.log('🚨 Please ensure:');
+      console.log('  1. Backend server is running: node server.js');
+      console.log('  2. Backend is accessible at', BACKEND_URL);
+      return;
+    }
+    console.log(''); // Add spacing after system check
   }
   
   switch (command) {
@@ -303,10 +403,12 @@ async function main() {
       break;
     case 'cursor':
     case 'point':
+    case 'pointing':
       await tester.runSingleTest('cursor');
       break;
     case 'translate':
     case 'move':
+    case 'translation':
       await tester.runSingleTest('translation');
       break;
     case 'rotate':
@@ -315,11 +417,27 @@ async function main() {
       break;
     case 'scale':
     case 'scaling':
+    case 'pinch':
       await tester.runSingleTest('scaling');
+      break;
+    case 'check':
+    case 'status':
+      // System check already done above
+      console.log('✅ System check completed');
       break;
     default:
       console.log(`❌ Unknown command: ${command}`);
+      console.log('Use "node movement-test.js" to see available options');
   }
 }
 
-main().catch(console.error);
+// Handle process termination gracefully
+process.on('SIGINT', () => {
+  console.log('\n🛑 Test interrupted by user');
+  process.exit(0);
+});
+
+main().catch(error => {
+  console.error('💥 Fatal error:', error.message);
+  process.exit(1);
+});
