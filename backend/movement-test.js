@@ -104,110 +104,123 @@ class MovementTester {
     };
   }
 
-  // Generate scaling movements with pinch distance changes
-  generateScalingMovement(elapsedTime) {
-    const t = elapsedTime / 1000;
-    const scaleOscillation = Math.sin(t * 1.0); // Slower oscillation
-    const baseDistance = 0.4;
-    const scaleRange = 0.6;
-    
-    // Simulate pinch distance by varying finger positions
-    const pinchDistance = baseDistance + Math.abs(scaleOscillation * scaleRange);
-    
-    const position = {
-      x: scaleOscillation * scaleRange * 0.5,  // Hands moving apart/together
-      y: 0.2,                                  // Slightly elevated
-      z: scaleOscillation * scaleRange * 0.2   // Some depth movement
-    };
-    
-    return {
-      orientation: [0.02, 0.02, 0.02], // Very stable for precise scaling
-      position,
-      pinchDistance, // Used for finger positioning
-      description: `Scaling: pinch distance = ${pinchDistance.toFixed(3)}m`
-    };
-  }
+  // Update getGestureFingers to work with IMU-based pinch
+getGestureFingers(gesture, movementData = null) {
+  const patterns = {
+    pointing: { index: 0.1, middle: 0.9, ring: 0.9, little: 0.9 },
+    open_palm: { index: 0.1, middle: 0.1, ring: 0.1, little: 0.1 },
+    fist: { index: 0.9, middle: 0.9, ring: 0.9, little: 0.9 },
+    pinch: { index: 0.3, middle: 0.8, ring: 0.8, little: 0.8 } // Index slightly bent for pinch
+  };
+  
+  let fingers = { ...patterns[gesture] } || { ...patterns.open_palm };
+  
+  // For pinch, we don't need to vary based on distance since IMU handles it
+  // Just keep consistent pinch finger position
+  
+  // Add minimal realistic noise
+  Object.keys(fingers).forEach(finger => {
+    fingers[finger] += (Math.random() - 0.5) * 0.03;
+    fingers[finger] = Math.max(0, Math.min(1, fingers[finger]));
+  });
 
-  // Generate gesture-specific finger positions
-  getGestureFingers(gesture, movementData = null) {
-    const patterns = {
-      pointing: { index: 0.1, middle: 0.9, ring: 0.9, little: 0.9 },
-      open_palm: { index: 0.1, middle: 0.1, ring: 0.1, little: 0.1 },
-      fist: { index: 0.9, middle: 0.9, ring: 0.9, little: 0.9 },
-      pinch: { index: 0.3, middle: 0.8, ring: 0.8, little: 0.8 }
-    };
-    
-    let fingers = { ...patterns[gesture] } || { ...patterns.open_palm };
-    
-    // For pinch gesture, vary finger positions based on pinch distance
-    if (gesture === 'pinch' && movementData && movementData.pinchDistance) {
-      const pinchFactor = Math.max(0.1, Math.min(0.8, movementData.pinchDistance));
-      fingers.index = pinchFactor;
+  return fingers;
+}
+
+// Update generateScalingMovement to work with IMU-based pinch detection
+generateScalingMovement(elapsedTime) {
+  const t = elapsedTime / 1000;
+  const scaleOscillation = Math.sin(t * 1.0);
+  
+  // For IMU-based pinch, we use hand orientation (roll angle) to indicate pinching
+  // More roll = closer pinch = smaller scale
+  const baseRoll = 0.3; // Base roll angle
+  const rollRange = 0.4; // Roll variation for scaling
+  
+  const rollAngle = baseRoll + (scaleOscillation * rollRange);
+  
+  const orientation = [
+    rollAngle,  // Roll indicates pinch closeness
+    0.05,       // Stable pitch
+    0.05        // Stable yaw
+  ];
+  
+  const position = {
+    x: scaleOscillation * 0.15,  // Slight horizontal movement
+    y: 0.2,                       // Elevated position
+    z: scaleOscillation * 0.1    // Slight depth movement
+  };
+  
+  return {
+    orientation,
+    position,
+    description: `IMU Scaling: roll = ${rollAngle.toFixed(3)} rad (${scaleOscillation > 0 ? 'expanding' : 'contracting'})`
+  };
+}
+
+// Update generateTestData for IMU-based system
+generateTestData() {
+  const currentTest = this.testSequences[this.currentTestIndex];
+  const elapsedTime = Date.now() - this.testStartTime;
+  const movement = currentTest.movement(elapsedTime);
+  
+  const fingers = this.getGestureFingers(currentTest.gesture, movement);
+  
+  // Add small random variations
+  const noiseLevel = 0.001;
+  Object.keys(movement.position).forEach(axis => {
+    movement.position[axis] += (Math.random() - 0.5) * noiseLevel;
+  });
+  
+  movement.orientation = movement.orientation.map(angle => 
+    angle + (Math.random() - 0.5) * noiseLevel
+  );
+
+  // Generate realistic gyroscope data based on movement
+  const gyroNoise = 0.05;
+  const gyroscope = movement.orientation.map((angle, i) => {
+    const prevAngle = this.previousOrientation[i] || 0;
+    const angularVelocity = (angle - prevAngle) * 50; // Approximate at 50Hz
+    return angularVelocity + (Math.random() - 0.5) * gyroNoise;
+  });
+  
+  this.previousOrientation = [...movement.orientation];
+
+  return {
+    deviceId: DEVICE_ID,
+    timestamp: Date.now(),
+    imu: {
+      orientation: movement.orientation,
+      acceleration: [
+        (Math.random() - 0.5) * 0.3,
+        9.8 + (Math.random() - 0.5) * 0.2,
+        (Math.random() - 0.5) * 0.3
+      ],
+      gyroscope
+    },
+    position: movement.position,
+    fingers, // Still used for other gestures
+    thumb: { 
+      bend: currentTest.gesture === 'pinch' ? 0.3 : // Slightly bent for pinch
+           (currentTest.gesture === 'fist' ? 0.9 : 0.4)
+    },
+    palm: { 
+      pressure: currentTest.gesture === 'fist' ? 0.8 : 
+               currentTest.gesture === 'pinch' ? 0.5 : 0.3 
+    },
+    switches: {
+      selectButton: currentTest.gesture === 'pinch' && elapsedTime > 1000,
+      modeButton: false,
+      confirmButton: false
+    },
+    gestureMetadata: {
+      testName: currentTest.name,
+      elapsedTime,
+      description: movement.description,
+      expectedGesture: currentTest.gesture
     }
-    
-    // Add realistic noise
-    Object.keys(fingers).forEach(finger => {
-      fingers[finger] += (Math.random() - 0.5) * 0.05; // Reduced noise
-      fingers[finger] = Math.max(0, Math.min(1, fingers[finger]));
-    });
-
-    return fingers;
-  }
-
-  // Generate complete sensor data for current test
-  generateTestData() {
-    const currentTest = this.testSequences[this.currentTestIndex];
-    const elapsedTime = Date.now() - this.testStartTime;
-    const movement = currentTest.movement(elapsedTime);
-    
-    const fingers = this.getGestureFingers(currentTest.gesture, movement);
-    
-    // Add small random variations to make movement more realistic
-    const noiseLevel = 0.001;
-    Object.keys(movement.position).forEach(axis => {
-      movement.position[axis] += (Math.random() - 0.5) * noiseLevel;
-    });
-    
-    movement.orientation = movement.orientation.map(angle => 
-      angle + (Math.random() - 0.5) * noiseLevel
-    );
-
-    return {
-      deviceId: DEVICE_ID,
-      timestamp: Date.now(),
-      imu: {
-        orientation: movement.orientation,
-        acceleration: [
-          (Math.random() - 0.5) * 0.3,
-          9.8 + (Math.random() - 0.5) * 0.2,
-          (Math.random() - 0.5) * 0.3
-        ],
-        gyroscope: movement.orientation.map(o => o * 0.3 + (Math.random() - 0.5) * 0.05)
-      },
-      position: movement.position,
-      fingers,
-      thumb: { 
-        bend: currentTest.gesture === 'pinch' ? 
-          (movement.pinchDistance ? Math.max(0.1, movement.pinchDistance) : 0.3) : 
-          (currentTest.gesture === 'fist' ? 0.9 : 0.4)
-      },
-      palm: { 
-        pressure: currentTest.gesture === 'fist' ? 0.8 : 
-                 currentTest.gesture === 'pinch' ? 0.6 : 0.3 
-      },
-      switches: {
-        selectButton: currentTest.gesture === 'pinch' && elapsedTime > 1000,
-        modeButton: false,
-        confirmButton: false
-      },
-      gestureMetadata: {
-        testName: currentTest.name,
-        elapsedTime,
-        description: movement.description,
-        expectedGesture: currentTest.gesture
-      }
-    };
-  }
+  };
+}
 
   // Send test data to backend with enhanced error handling
   async sendTestData() {

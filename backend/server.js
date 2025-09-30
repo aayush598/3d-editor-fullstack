@@ -36,125 +36,156 @@ const GESTURE_THRESHOLDS = {
   PALM_PRESSURE: 0.5
 };
 
-/**
- * Calculate movement data between frames
- */
-function calculateMovementData(currentData, previousData) {
-  if (!previousData) {
-    return {
-      orientationDelta: [0, 0, 0],
-      positionDelta: { x: 0, y: 0, z: 0 },
-      velocity: { x: 0, y: 0, z: 0 },
-      scaleFactor: 1.0,
-      orientation: currentData.imu.orientation,
-      position: currentData.position || { x: 0, y: 0, z: 0 },
-      movementMagnitude: 0,
-      positionMagnitude: 0,
-      deltaTime: 0,
-      timestamp: currentData.timestamp
-    };
+// Replace the gesture classification function with IMU-based pinch detection
+
+function classifyGesture(sensorData) {
+  const { imu, fingers, thumb, palm, switches } = sensorData;
+  
+  // Calculate hand orientation from IMU
+  const [roll, pitch, yaw] = imu.orientation;
+  
+  // IMU-based pinch detection using thumb and index finger proximity
+  // We'll use gyroscope magnitude to detect pinching motion
+  const gyroMagnitude = Math.sqrt(
+    imu.gyroscope[0] ** 2 + 
+    imu.gyroscope[1] ** 2 + 
+    imu.gyroscope[2] ** 2
+  );
+  
+  // Calculate acceleration magnitude for motion detection
+  const accelMagnitude = Math.sqrt(
+    imu.acceleration[0] ** 2 + 
+    imu.acceleration[1] ** 2 + 
+    imu.acceleration[2] ** 2
+  );
+  
+  // IMU-based pinch detection
+  // Pinch is detected by specific orientation pattern and low gyro movement
+  const thumbIndexDistance = calculateIMUBasedPinchDistance(imu, sensorData.position);
+  const isPinching = thumbIndexDistance < 0.03 && gyroMagnitude < 0.5; // 3cm threshold
+  
+  // Pointing: index extended, stable orientation
+  const indexExtended = fingers.index < 0.3;
+  const othersRetracted = fingers.middle > 0.7 && fingers.ring > 0.7 && fingers.little > 0.7;
+  const isPointing = indexExtended && othersRetracted && gyroMagnitude < 0.3;
+  
+  // Fist: high gyro activity or all fingers retracted
+  const allRetracted = Object.values(fingers).every(bend => bend > 0.6);
+  const isFist = (allRetracted || gyroMagnitude > 1.0) && !isPinching;
+  
+  // Open palm: all fingers extended, stable
+  const allExtended = Object.values(fingers).every(bend => bend < 0.4);
+  const isOpenPalm = allExtended && gyroMagnitude < 0.5 && !isPinching;
+  
+  // Determine gesture with confidence
+  let gesture = 'neutral';
+  let confidence = 0.5;
+  
+  if (isPinching) {
+    gesture = 'pinch';
+    confidence = Math.min(0.95, 0.7 + (0.03 - thumbIndexDistance) / 0.03 * 0.25);
+  } else if (isPointing) {
+    gesture = 'pointing';
+    confidence = 0.85;
+  } else if (isFist) {
+    gesture = 'fist';
+    confidence = Math.min(0.9, 0.6 + gyroMagnitude / 2.0 * 0.3);
+  } else if (isOpenPalm) {
+    gesture = 'open_palm';
+    confidence = 0.8;
   }
+  
+  return { gesture, confidence };
+}
 
-  const deltaTime = (currentData.timestamp - previousData.timestamp) / 1000; // Convert to seconds
-  const currentPos = currentData.position || { x: 0, y: 0, z: 0 };
-  const prevPos = previousData.position || { x: 0, y: 0, z: 0 };
+// New function: Calculate pinch distance using IMU orientation and position
+function calculateIMUBasedPinchDistance(imu, position) {
+  // Use IMU orientation to estimate thumb-index distance
+  // Pinching typically shows specific roll angle and reduced pitch variation
+  const [roll, pitch, yaw] = imu.orientation;
+  
+  // When pinching, roll angle increases (thumb rotating toward index)
+  // and gyroscope shows minimal movement
+  const gyroMagnitude = Math.sqrt(
+    imu.gyroscope[0] ** 2 + 
+    imu.gyroscope[1] ** 2 + 
+    imu.gyroscope[2] ** 2
+  );
+  
+  // Estimate distance based on roll angle deviation from neutral
+  // Neutral hand position: roll ≈ 0, pinched: roll increases
+  const rollDeviation = Math.abs(roll);
+  const pitchStability = 1.0 - Math.min(1.0, Math.abs(pitch) / (Math.PI / 4));
+  
+  // Distance decreases as roll increases and motion stabilizes
+  const baseDistance = 0.05; // 5cm base distance
+  const pinchFactor = Math.max(0, 1.0 - (rollDeviation / (Math.PI / 6))); // Roll up to 30° indicates pinch
+  const stabilityFactor = Math.max(0, 1.0 - gyroMagnitude);
+  
+  return baseDistance * pinchFactor * (0.5 + 0.5 * stabilityFactor);
+}
 
-  // Calculate position deltas
+// Update movement calculation to use IMU-based pinch for scaling
+function calculateMovementData(deviceId, currentData, previousData) {
+  if (!previousData) return null;
+  
+  const deltaTime = (currentData.timestamp - previousData.timestamp) / 1000;
+  if (deltaTime <= 0 || deltaTime > 1) return null;
+  
+  // Position delta
   const positionDelta = {
-    x: currentPos.x - prevPos.x,
-    y: currentPos.y - prevPos.y,
-    z: currentPos.z - prevPos.z
+    x: currentData.position.x - previousData.position.x,
+    y: currentData.position.y - previousData.position.y,
+    z: currentData.position.z - previousData.position.z
   };
-
-  // Calculate velocity
-  const velocity = deltaTime > 0 ? {
+  
+  const positionMagnitude = Math.sqrt(
+    positionDelta.x ** 2 + positionDelta.y ** 2 + positionDelta.z ** 2
+  );
+  
+  // Velocity
+  const velocity = {
     x: positionDelta.x / deltaTime,
     y: positionDelta.y / deltaTime,
     z: positionDelta.z / deltaTime
-  } : { x: 0, y: 0, z: 0 };
-
-  // Calculate orientation deltas
-  const orientationDelta = [
-    currentData.imu.orientation[0] - previousData.imu.orientation[0],
-    currentData.imu.orientation[1] - previousData.imu.orientation[1],
-    currentData.imu.orientation[2] - previousData.imu.orientation[2]
-  ];
-
-  // Calculate movement magnitudes
-  const positionMagnitude = Math.sqrt(
-    positionDelta.x * positionDelta.x + 
-    positionDelta.y * positionDelta.y + 
-    positionDelta.z * positionDelta.z
-  );
-
+  };
+  
+  // Orientation delta
+  const orientationDelta = currentData.imu.orientation.map((angle, i) => {
+    let delta = angle - previousData.imu.orientation[i];
+    // Normalize to [-π, π]
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    while (delta < -Math.PI) delta += 2 * Math.PI;
+    return delta;
+  });
+  
+  // IMU-based scale factor for pinch gesture
+  const currentPinchDist = calculateIMUBasedPinchDistance(currentData.imu, currentData.position);
+  const previousPinchDist = calculateIMUBasedPinchDistance(previousData.imu, previousData.position);
+  
+  // Scale factor based on IMU pinch distance change
+  const scaleFactor = previousPinchDist > 0.001 ? currentPinchDist / previousPinchDist : 1.0;
+  
+  // Overall movement magnitude
   const orientationMagnitude = Math.sqrt(
-    orientationDelta[0] * orientationDelta[0] +
-    orientationDelta[1] * orientationDelta[1] +
-    orientationDelta[2] * orientationDelta[2]
+    orientationDelta[0] ** 2 + orientationDelta[1] ** 2 + orientationDelta[2] ** 2
   );
-
-  const movementMagnitude = Math.max(positionMagnitude, orientationMagnitude);
-
-  // Calculate scale factor for pinch gestures
-  let scaleFactor = 1.0;
-  if (currentData.fingers && previousData.fingers) {
-    const currentPinchDistance = Math.abs(currentData.fingers.index - (currentData.thumb?.bend || 0.5));
-    const prevPinchDistance = Math.abs(previousData.fingers.index - (previousData.thumb?.bend || 0.5));
-    
-    if (prevPinchDistance > 0) {
-      scaleFactor = currentPinchDistance / prevPinchDistance;
-      // Clamp scale factor to reasonable range
-      scaleFactor = Math.max(0.5, Math.min(2.0, scaleFactor));
-    }
-  }
-
+  
+  const movementMagnitude = Math.sqrt(
+    positionMagnitude ** 2 + orientationMagnitude ** 2
+  );
+  
   return {
     orientationDelta,
     positionDelta,
     velocity,
     scaleFactor,
     orientation: currentData.imu.orientation,
-    position: currentPos,
+    position: currentData.position,
     movementMagnitude,
     positionMagnitude,
     deltaTime,
     timestamp: currentData.timestamp
-  };
-}
-
-/**
- * Gesture Classification Logic
- */
-function classifyGesture(sensorData) {
-  const { fingers, thumb, palm } = sensorData;
-  
-  const closedFingers = Object.values(fingers).filter(bend => bend > GESTURE_THRESHOLDS.FINGER_CLOSED).length;
-  const openFingers = Object.values(fingers).filter(bend => bend < GESTURE_THRESHOLDS.FINGER_OPEN).length;
-  
-  const isPinch = (
-    fingers.index < GESTURE_THRESHOLDS.PINCH_THRESHOLD && 
-    thumb.bend < GESTURE_THRESHOLDS.PINCH_THRESHOLD &&
-    Math.abs(fingers.index - thumb.bend) < 0.2
-  );
-  
-  const isFist = closedFingers >= 4;
-  const isOpenPalm = openFingers >= 4;
-  const isPointing = (
-    fingers.index < GESTURE_THRESHOLDS.FINGER_OPEN && 
-    fingers.middle > GESTURE_THRESHOLDS.FINGER_CLOSED &&
-    fingers.ring > GESTURE_THRESHOLDS.FINGER_CLOSED
-  );
-  
-  let gesture = 'neutral';
-  if (isPinch) gesture = 'pinch';
-  else if (isFist) gesture = 'fist';
-  else if (isOpenPalm) gesture = 'open_palm';
-  else if (isPointing) gesture = 'pointing';
-  
-  return {
-    gesture,
-    confidence: calculateConfidence(gesture, { fingers, thumb, palm }),
-    details: { isPinch, isFist, isOpenPalm, isPointing, closedFingers, openFingers }
   };
 }
 
@@ -212,8 +243,8 @@ function processSensorData(rawData) {
   // Get previous frame data for movement calculation
   const previousData = previousFrameData.get(deviceId);
   
-  // Calculate movement data
-  const movementData = calculateMovementData(rawData, previousData);
+  // Calculate movement data - FIX: Pass correct parameters
+  const movementData = calculateMovementData(deviceId, rawData, previousData);
   
   // Store current data for next frame
   previousFrameData.set(deviceId, {
@@ -221,7 +252,7 @@ function processSensorData(rawData) {
     timestamp: rawData.timestamp
   });
   
-  const gestureResult = classifyGesture({ fingers, thumb, palm });
+  const gestureResult = classifyGesture(rawData); // FIX: Pass full rawData
   const cursorOrientation = normalizeCursorOrientation(imu);
   const transformMode = gestureToTransformMode(gestureResult.gesture);
   
@@ -239,7 +270,18 @@ function processSensorData(rawData) {
     gestureConfidence: gestureResult.confidence,
     transformMode,
     actions,
-    movementData, // Now includes calculated movement data
+    movementData: movementData || { // FIX: Provide default if null
+      orientationDelta: [0, 0, 0],
+      positionDelta: { x: 0, y: 0, z: 0 },
+      velocity: { x: 0, y: 0, z: 0 },
+      scaleFactor: 1.0,
+      orientation: imu.orientation,
+      position: rawData.position,
+      movementMagnitude: 0,
+      positionMagnitude: 0,
+      deltaTime: 0,
+      timestamp: rawData.timestamp
+    },
     rawSensorData: {
       imu: imu.orientation,
       position: rawData.position,
@@ -249,6 +291,50 @@ function processSensorData(rawData) {
     }
   };
 }
+
+// Update the POST endpoint logging to handle null movementData
+app.post('/sensor-data', (req, res) => {
+  try {
+    const rawSensorData = req.body;
+    
+    if (!rawSensorData.deviceId || !rawSensorData.imu || !rawSensorData.fingers) {
+      return res.status(400).json({ 
+        error: 'Missing required sensor data fields',
+        required: ['deviceId', 'imu', 'fingers', 'thumb', 'switches']
+      });
+    }
+    
+    const processedData = processSensorData(rawSensorData);
+    
+    // Update current state
+    if (rawSensorData.deviceId.includes('left')) {
+      currentGestureState.leftHand = processedData;
+    } else {
+      currentGestureState.rightHand = processedData;
+    }
+    
+    // Broadcast to all connected frontend clients
+    io.emit('gesture-update', processedData);
+    
+    // Enhanced logging with null check
+    const movementMag = processedData.movementData?.movementMagnitude?.toFixed(3) || '0.000';
+    console.log(`[${processedData.deviceId}] ${processedData.gesture} (${(processedData.gestureConfidence * 100).toFixed(0)}%) | Movement: ${movementMag}`);
+    
+    res.json({ 
+      status: 'success', 
+      processedData: {
+        gesture: processedData.gesture,
+        transformMode: processedData.transformMode,
+        confidence: processedData.gestureConfidence,
+        movementMagnitude: processedData.movementData?.movementMagnitude || 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error processing sensor data:', error);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
+  }
+});
 
 // API Endpoints
 app.post('/sensor-data', (req, res) => {
